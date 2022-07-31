@@ -1,0 +1,10 @@
+{
+  "version": 0,
+  "services": [
+    {
+      "name": "test",
+      "duration": 5000
+    }
+  ],
+  "discord_webhook": "https://example.com/discord_webhook_url"
+}
