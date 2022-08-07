@@ -44,7 +44,12 @@ class DiscordWebhookNotifier implements Notifier {
   }
 }
 
-export class PassiveCat {
+export interface Cat {
+  check(date: Date): void;
+  getName(): string;
+}
+
+export class PassiveCat implements Cat {
   private lastFeedDate: Date;
   private lastReportDate: Date | undefined;
   constructor(
