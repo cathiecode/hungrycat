@@ -1,5 +1,5 @@
 import { fromUnixTime } from "date-fns";
-import { Message, Cat } from "./index";
+import { Message, PassiveCat } from "./index";
 import { jest } from "@jest/globals";
 
 test("生まれてからtorelanceDurationMS経過した後に空腹に気がついてNotifierを呼ぶ", () => {
@@ -7,7 +7,7 @@ test("生まれてからtorelanceDurationMS経過した後に空腹に気がつ�
 
   const toleranceSeconds = 60;
 
-  const cat = new Cat(
+  const cat = new PassiveCat(
     "test cat",
     toleranceSeconds * 1000,
     0,
@@ -28,7 +28,7 @@ test("空腹に気がついてNotifierを呼んだあとREMINDER_DURATION経過�
   const toleranceSeconds = 60;
   const reminderDuration = 120;
 
-  const cat = new Cat(
+  const cat = new PassiveCat(
     "test cat",
     toleranceSeconds * 1000,
     reminderDuration * 1000,

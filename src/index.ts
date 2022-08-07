@@ -44,7 +44,7 @@ class DiscordWebhookNotifier implements Notifier {
   }
 }
 
-export class Cat {
+export class PassiveCat {
   private lastFeedDate: Date;
   private lastReportDate: Date | undefined;
   constructor(
@@ -101,7 +101,7 @@ if (process.argv[1] === self) {
   const config = JSON.parse(readFileSync(process.argv[2]).toString("utf-8"));
 
   let interval = 60 * 1000;
-  const cats: Cat[] = [];
+  const cats: PassiveCat[] = [];
 
   config.services.forEach(
     (serviceConfig: {
@@ -114,7 +114,7 @@ if (process.argv[1] === self) {
         interval = serviceInterval;
       }
       cats.push(
-        new Cat(
+        new PassiveCat(
           serviceConfig.name,
           serviceConfig.duration,
           serviceConfig.reminderDuration ?? 1000 * 60 * 60,
