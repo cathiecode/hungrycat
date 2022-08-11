@@ -1,5 +1,5 @@
 import { fromUnixTime } from "date-fns";
-import { Message, PassiveCat } from "./index";
+import { ActiveCat, Message, PassiveCat } from "./index";
 import { jest } from "@jest/globals";
 
 test("生まれてからtorelanceDurationMS経過した後に空腹に気がついてNotifierを呼ぶ", () => {
@@ -48,4 +48,25 @@ test("空腹に気がついてNotifierを呼んだあとREMINDER_DURATION経過�
     fromUnixTime(1659074852 + toleranceSeconds * 2 + reminderDuration * 2)
   );
   expect(notify.mock.calls.length).toBe(2);
+});
+
+test("生まれてからtorelanceDurationMS経過した後にチェックしてダウンしていたらNotifierを呼ぶ", async () => {
+  const notify = jest.fn(async (message: Message) => {});
+
+  const toleranceSeconds = 60;
+
+  const cat = new ActiveCat(
+    "test cat",
+    toleranceSeconds * 1000,
+    0,
+    fromUnixTime(1659074852),
+    { check: async () => false },
+    { notify }
+  );
+
+  await cat.check(fromUnixTime(1659074852 + toleranceSeconds / 2));
+  expect(notify.mock.calls.length).toBe(0);
+
+  await cat.check(fromUnixTime(1659074852 + toleranceSeconds * 2));
+  expect(notify.mock.calls.length).toBe(1);
 });
