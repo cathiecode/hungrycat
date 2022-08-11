@@ -2,6 +2,7 @@ import fetch, { Response } from "node-fetch";
 import {
   differenceInMilliseconds,
   fromUnixTime,
+  getUnixTime,
   isAfter,
   isBefore,
   subHours,
@@ -151,6 +152,7 @@ export class ConsoleServiceLogs extends VolatileMemoryServiceLogs {
 export interface Cat {
   check(date: Date): void;
   getName(): string;
+  isAlive(date: Date): boolean;
 }
 
 export class PassiveCat implements Cat {
@@ -200,6 +202,13 @@ export class PassiveCat implements Cat {
 
   getName(): string {
     return this.name;
+  }
+
+  isAlive(date: Date): boolean {
+    return (
+      differenceInMilliseconds(date, this.lastFeedDate) <
+      this.toleranceDurationMS
+    );
   }
 }
 
@@ -253,11 +262,20 @@ export class ActiveCat<T extends Checker> implements Cat {
   getName(): string {
     return this.name;
   }
+
+  isAlive(date: Date): boolean {
+    return (
+      differenceInMilliseconds(date, this.lastFeedDate) <
+      this.toleranceDurationMS
+    );
+  }
 }
 
 import url from "url";
 import Fastify from "fastify";
 import { fastifyRequestContextPlugin } from "@fastify/request-context";
+import fastifyStatic from "@fastify/static";
+import path from "node:path";
 
 type ServiceConfig =
   | {
@@ -339,7 +357,7 @@ if (process.argv[1] === self) {
 
   const fastify = Fastify();
 
-  type Capability = "GET_LOG" | "HEARTBEAT";
+  type Capability = "GET_LOG" | "HEARTBEAT" | "LIST_SERVICE";
 
   fastify.register(fastifyRequestContextPlugin, {
     hook: "onRequest",
@@ -347,6 +365,23 @@ if (process.argv[1] === self) {
       capability: [] as Capability[],
     },
   });
+
+  fastify.register(
+    function (instance, options, done) {
+      instance.register(fastifyStatic, {
+        root: path.join(
+          path.dirname(new URL(import.meta.url).pathname),
+          "public",
+          "ui"
+        ),
+      });
+      instance.setNotFoundHandler((request, reply) => {
+        reply.sendFile("index.html");
+      });
+      done();
+    },
+    { prefix: "/ui" }
+  );
 
   fastify.listen({ port: parseInt(process.env.PORT ?? "80") });
 
@@ -374,12 +409,30 @@ if (process.argv[1] === self) {
         ...request.requestContext.get("capability"),
         "GET_LOG",
         "HEARTBEAT",
+        "LIST_SERVICE",
       ]);
       done();
     } catch (e) {
       console.error(e);
       done();
     }
+  });
+
+  fastify.get("/service", async (request, reply) => {
+    if (!request.requestContext.get("capability").includes("LIST_SERVICE")) {
+      reply.code(401);
+      return {
+        ok: false,
+        error: "Unauthorized",
+      };
+    }
+    return {
+      ok: true,
+      services: cats.map((cat) => ({
+        name: cat.getName(),
+        status: cat.isAlive(new Date()),
+      })),
+    };
   });
 
   fastify.post("/service/:service/hb", (request, reply) => {
@@ -432,7 +485,37 @@ if (process.argv[1] === self) {
     );
     return {
       ok: true,
-      logs,
+      logs: logs.map((log) => ({
+        type: log.type,
+        date: getUnixTime(log.date),
+      })),
+    };
+  });
+
+  fastify.get("/token/:token/capability", (request, reply) => {
+    const params = request.params as Record<"token", string>;
+
+    if (params.token !== config.http_token) {
+      reply.code(404);
+      return {
+        ok: false,
+        error: "No such token",
+      };
+    }
+
+    if (
+      params.token !==
+      request.headers["authorization"]?.slice("Bearer ".length).trim()
+    ) {
+      reply.code(403);
+      return {
+        ok: false,
+        error: "Invalid token access",
+      };
+    }
+    return {
+      ok: true,
+      capability: request.requestContext.get("capability"),
     };
   });
 }
