@@ -1,5 +1,11 @@
 import fetch, { Response } from "node-fetch";
-import { differenceInMilliseconds } from "date-fns";
+import {
+  differenceInMilliseconds,
+  fromUnixTime,
+  isAfter,
+  isBefore,
+  subHours,
+} from "date-fns";
 import { readFileSync } from "node:fs";
 
 export type MessageType = "TIMEOUT" | "NOTIFY_ERROR";
@@ -16,6 +22,27 @@ export interface Notifier {
 
 export interface Checker {
   check(): Promise<boolean>;
+}
+
+export type ServiceLogLineType = "LIVING" | "DEAD" | "DYING";
+
+export type ServiceLogLine = {
+  type: ServiceLogLineType;
+  date: Date;
+};
+
+export interface ServiceLogs {
+  findByDate(
+    service: string,
+    since: Date,
+    until?: Date
+  ): Promise<ServiceLogLine[]>;
+}
+
+export interface ServiceLogger {
+  logLiving(service: string, date: Date): void;
+  logDead(service: string, date: Date): void;
+  logDying(service: string, date: Date): void;
 }
 
 export default class MockNotifier implements Notifier {
@@ -59,6 +86,68 @@ class HTTPGetStatusChecker implements Checker {
   }
 }
 
+abstract class BaseServiceLogs implements ServiceLogger {
+  logLiving(service: string, date: Date): void {
+    this.log(service, { type: "LIVING", date: date });
+  }
+  logDead(service: string, date: Date): void {
+    this.log(service, { type: "DEAD", date: date });
+  }
+  logDying(service: string, date: Date): void {
+    this.log(service, { type: "DYING", date: date });
+  }
+
+  protected abstract log(service: string, data: ServiceLogLine): void;
+}
+
+export class VolatileMemoryServiceLogs
+  extends BaseServiceLogs
+  implements ServiceLogs, ServiceLogger
+{
+  private serviceLogs: Map<string, ServiceLogLine[]> = new Map();
+
+  async findByDate(
+    service: string,
+    since: Date,
+    until?: Date | undefined
+  ): Promise<ServiceLogLine[]> {
+    const log = this.serviceLogs.get(service);
+    if (!log) {
+      return [];
+    }
+    return log.filter(
+      (line) =>
+        isAfter(line.date, since) &&
+        (until === undefined || isBefore(line.date, until))
+    );
+  }
+
+  protected log(service: string, data: ServiceLogLine): void {
+    if (Math.random() < 0.1) {
+      this.rotate(data.date);
+    }
+    const existingLog = this.serviceLogs.get(service);
+    if (existingLog) {
+      existingLog.push(data);
+    } else {
+      this.serviceLogs.set(service, [data]);
+    }
+  }
+
+  private rotate(date: Date) {
+    for (let log of this.serviceLogs.values()) {
+      log.filter((logLine) => isBefore(logLine.date, subHours(date, 1)));
+    }
+  }
+}
+
+export class ConsoleServiceLogs extends VolatileMemoryServiceLogs {
+  protected log(service: string, data: ServiceLogLine) {
+    console.log(`[${service}]: ${JSON.stringify(data)}`);
+    super.log(service, data);
+  }
+}
+
 export interface Cat {
   check(date: Date): void;
   getName(): string;
@@ -72,13 +161,15 @@ export class PassiveCat implements Cat {
     private toleranceDurationMS: number,
     private reminderDurationMS: number,
     startDate: Date,
-    private notifier: Notifier
+    private notifier: Notifier,
+    private serviceLogs: ServiceLogger
   ) {
     this.lastFeedDate = startDate;
   }
 
   feed(date: Date) {
     this.lastFeedDate = date;
+    this.serviceLogs.logLiving(this.getName(), date);
   }
 
   check(date: Date) {
@@ -88,6 +179,7 @@ export class PassiveCat implements Cat {
     ) {
       return;
     }
+    this.serviceLogs.logDead(this.getName(), date);
     if (
       differenceInMilliseconds(date, this.lastReportDate ?? 0) <
       this.reminderDurationMS
@@ -120,14 +212,18 @@ export class ActiveCat<T extends Checker> implements Cat {
     private reminderDurationMS: number,
     startDate: Date,
     private checker: T,
-    private notifier: Notifier
+    private notifier: Notifier,
+    private serviceLogs: ServiceLogger
   ) {
     this.lastFeedDate = startDate;
   }
 
   async check(date: Date) {
     if (await this.checker.check()) {
+      this.serviceLogs.logLiving(this.getName(), date);
       this.lastFeedDate = date;
+    } else {
+      this.serviceLogs.logDying(this.getName(), date);
     }
     if (
       differenceInMilliseconds(date, this.lastFeedDate) <
@@ -135,6 +231,7 @@ export class ActiveCat<T extends Checker> implements Cat {
     ) {
       return;
     }
+    this.serviceLogs.logDead(this.getName(), date);
     if (
       differenceInMilliseconds(date, this.lastReportDate ?? 0) <
       this.reminderDurationMS
@@ -185,6 +282,7 @@ type Config = {
 const self = url.fileURLToPath(import.meta.url);
 
 if (process.argv[1] === self) {
+  const serviceLogs = new ConsoleServiceLogs();
   const config: Config = JSON.parse(
     readFileSync(process.argv[2]).toString("utf-8")
   );
@@ -205,7 +303,8 @@ if (process.argv[1] === self) {
           serviceConfig.duration,
           serviceConfig.reminderDuration ?? 1000 * 60 * 60,
           new Date(),
-          new DiscordWebhookNotifier(config.discord_webhook)
+          new DiscordWebhookNotifier(config.discord_webhook),
+          serviceLogs
         );
         cat = passiveCat;
         passiveCats.push(passiveCat);
@@ -217,7 +316,8 @@ if (process.argv[1] === self) {
           serviceConfig.reminderDuration ?? 1000 * 60 * 60,
           new Date(),
           new HTTPGetStatusChecker(serviceConfig.check_endpoint),
-          new DiscordWebhookNotifier(config.discord_webhook)
+          new DiscordWebhookNotifier(config.discord_webhook),
+          serviceLogs
         );
         cat = activeCat;
         activeCats.push(activeCat);
@@ -251,6 +351,30 @@ if (process.argv[1] === self) {
     cat.feed(new Date());
     return {
       ok: true,
+    };
+  });
+
+  fastify.get("/hb/:service/logs", async (request, reply) => {
+    const params = request.params as Record<"service", string>;
+    const query = request.query as Record<"since" | "until", unknown>;
+    if (typeof query.since !== "string" || typeof query.until !== "string") {
+      reply.code(400);
+      return {
+        ok: false,
+        error: "Query 'since' and 'until' are required",
+      };
+    }
+    const since = parseInt(query.since);
+    const until = parseInt(query.until);
+
+    const logs = await serviceLogs.findByDate(
+      params.service,
+      fromUnixTime(since),
+      fromUnixTime(until)
+    );
+    return {
+      ok: true,
+      logs,
     };
   });
 }
