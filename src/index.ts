@@ -338,7 +338,7 @@ if (process.argv[1] === self) {
   const fastify = Fastify();
   fastify.listen({ port: parseInt(process.env.PORT ?? "80") });
 
-  fastify.post("/hb/:service", (request, reply) => {
+  fastify.post("/service/:service/hb", (request, reply) => {
     const params = request.params as Record<"service", string>;
     const cat = passiveCats.find((cat) => cat.getName() === params.service);
 
@@ -354,7 +354,7 @@ if (process.argv[1] === self) {
     };
   });
 
-  fastify.get("/hb/:service/logs", async (request, reply) => {
+  fastify.get("/service/:service/logs", async (request, reply) => {
     const params = request.params as Record<"service", string>;
     const query = request.query as Record<"since" | "until", unknown>;
     if (typeof query.since !== "string" || typeof query.until !== "string") {
