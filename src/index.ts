@@ -257,6 +257,7 @@ export class ActiveCat<T extends Checker> implements Cat {
 
 import url from "url";
 import Fastify from "fastify";
+import { fastifyRequestContextPlugin } from "@fastify/request-context";
 
 type ServiceConfig =
   | {
@@ -276,6 +277,7 @@ type ServiceConfig =
 type Config = {
   version: 0;
   services: ServiceConfig[];
+  http_token: string;
   discord_webhook: string;
 };
 
@@ -336,9 +338,58 @@ if (process.argv[1] === self) {
   console.log(cats.length, "cat(s) loaded");
 
   const fastify = Fastify();
+
+  type Capability = "GET_LOG" | "HEARTBEAT";
+
+  fastify.register(fastifyRequestContextPlugin, {
+    hook: "onRequest",
+    defaultStoreValues: {
+      capability: [] as Capability[],
+    },
+  });
+
   fastify.listen({ port: parseInt(process.env.PORT ?? "80") });
 
+  fastify.addHook("onRequest", (request, reply, done) => {
+    try {
+      const authHeader = request.headers["authorization"];
+      if (typeof authHeader !== "string") {
+        done();
+        return;
+      }
+      const authHeaderSections = authHeader.split(" ");
+      if (
+        authHeaderSections.length !== 2 ||
+        authHeaderSections[0] !== "Bearer"
+      ) {
+        done();
+        return;
+      }
+      const token = authHeaderSections[1];
+      if (token !== config.http_token) {
+        done();
+        return;
+      }
+      request.requestContext.set("capability", [
+        ...request.requestContext.get("capability"),
+        "GET_LOG",
+        "HEARTBEAT",
+      ]);
+      done();
+    } catch (e) {
+      console.error(e);
+      done();
+    }
+  });
+
   fastify.post("/service/:service/hb", (request, reply) => {
+    if (!request.requestContext.get("capability").includes("HEARTBEAT")) {
+      reply.code(401);
+      return {
+        ok: false,
+        error: "Unauthorized",
+      };
+    }
     const params = request.params as Record<"service", string>;
     const cat = passiveCats.find((cat) => cat.getName() === params.service);
 
@@ -355,6 +406,13 @@ if (process.argv[1] === self) {
   });
 
   fastify.get("/service/:service/logs", async (request, reply) => {
+    if (!request.requestContext.get("capability").includes("GET_LOG")) {
+      reply.code(401);
+      return {
+        ok: false,
+        error: "Unauthorized",
+      };
+    }
     const params = request.params as Record<"service", string>;
     const query = request.query as Record<"since" | "until", unknown>;
     if (typeof query.since !== "string" || typeof query.until !== "string") {

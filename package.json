@@ -24,6 +24,7 @@
     "typescript": "^4.7.4"
   },
   "dependencies": {
+    "@fastify/request-context": "^4.0.0",
     "date-fns": "^2.29.1",
     "fastify": "^4.3.0",
     "node-fetch": "^3.2.9"

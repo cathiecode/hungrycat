@@ -13,5 +13,6 @@
       "check_endpoint": "https://example.com/"
     }
   ],
+  "http_token": "<Insert base64 token here>",
   "discord_webhook": "https://example.com/discord_webhook_url"
 }
