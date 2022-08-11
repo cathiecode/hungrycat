@@ -1,10 +1,19 @@
 {
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build",
+    "dev": "concurrently 'npm -w main run dev' 'npm -w ui run dev'"
+  },
   "workspaces": {
     "packages": [
-      "main"
+      "main",
+      "ui"
     ]
   },
   "dependencies": {
     "prettier": "^2.7.1"
+  },
+  "devDependencies": {
+    "concurrently": "^7.3.0"
   }
 }

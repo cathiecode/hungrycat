@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<!-- UI HTML for **DEVELOPMENT**, will be replaced with ui package output -->
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HungryCat</title>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module">
+    import RefreshRuntime from 'http://localhost:5173/ui/@react-refresh'
+    RefreshRuntime.injectIntoGlobalHook(window)
+    window.$RefreshReg$ = () => { }
+    window.$RefreshSig$ = () => (type) => type
+    window.__vite_plugin_react_preamble_installed__ = true
+  </script>
+  <script type="module" src="http://localhost:5173/ui/@vite/client"></script>
+  <script type="module" src="http://localhost:5173/ui/src/main.tsx"></script>
+</body>
+
+</html>
