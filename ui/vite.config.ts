@@ -11,7 +11,7 @@ export default defineConfig({
       input: "src/main.tsx",
     },
   },
-  base: "/ui",
+  base: "/ui/",
   server: {
     origin: "http://localhost:5173",
   },
