@@ -7,9 +7,6 @@ export default defineConfig({
   build: {
     // outDir に manifest.json を出力
     manifest: true,
-    rollupOptions: {
-      input: "src/main.tsx",
-    },
   },
   base: "/ui/",
   server: {
