@@ -217,7 +217,7 @@ export class PassiveCat implements Cat {
   }
 }
 
-export class ActiveCat<T extends Checker> implements Cat {
+export class ActiveCat implements Cat {
   private lastFeedDate: Date;
   private lastReportDate: Date | undefined;
   constructor(
@@ -225,7 +225,7 @@ export class ActiveCat<T extends Checker> implements Cat {
     private toleranceDurationMS: number,
     private reminderDurationMS: number,
     startDate: Date,
-    private checker: T,
+    private checker: Checker,
     private notifier: Notifier,
     private serviceLogs: ServiceLogger
   ) {
@@ -293,7 +293,9 @@ class NodeIntervalTimerService implements IntervalTimerService {
     if (existingTimer !== undefined) {
       clearInterval(existingTimer);
     }
-    const timer = setInterval(() => {callback()}, intervalMS);
+    const timer = setInterval(() => {
+      callback();
+    }, intervalMS);
 
     this.timers.set(id, timer);
   }
@@ -312,8 +314,8 @@ interface CatRepository {
   collect(): Cat[];
 }
 
-class SettingFileCatRepository {
-  
+interface PassiveCatRepository {
+  collectPassiveCat(): PassiveCat[];
 }
 
 import url from "url";
@@ -344,21 +346,26 @@ type Config = {
   discord_webhook: string;
 };
 
-const self = url.fileURLToPath(import.meta.url);
+class StaticCatRepository implements CatRepository, PassiveCatRepository {
+  private cats: Cat[];
+  constructor(activeCats: ActiveCat[], private passiveCats: PassiveCat[]) {
+    this.cats = [...activeCats, ...passiveCats];
+  }
+  collect(): Cat[] {
+    return this.cats;
+  }
+  collectPassiveCat(): PassiveCat[] {
+    return this.passiveCats;
+  }
+}
 
-if (process.argv[1] === self) {
-  const serviceLogs = new ConsoleServiceLogs();
-  const config: Config = JSON.parse(
-    readFileSync(process.argv[2]).toString("utf-8")
-  );
-
+function createStaticCatRepositoryFromConfig(
+  config: Config,
+  serviceLogs: ServiceLogger
+): StaticCatRepository {
+  const activeCats: ActiveCat[] = [];
   const passiveCats: PassiveCat[] = [];
-  const activeCats: ActiveCat<HTTPGetStatusChecker>[] = [];
-  const cats: Cat[] = [];
-
   config.services.forEach((serviceConfig) => {
-    let cat: Cat;
-
     switch (serviceConfig.type) {
       case "passive":
         const passiveCat = new PassiveCat(
@@ -369,7 +376,6 @@ if (process.argv[1] === self) {
           new DiscordWebhookNotifier(config.discord_webhook),
           serviceLogs
         );
-        cat = passiveCat;
         passiveCats.push(passiveCat);
         break;
       case "active":
@@ -382,18 +388,37 @@ if (process.argv[1] === self) {
           new DiscordWebhookNotifier(config.discord_webhook),
           serviceLogs
         );
-        cat = activeCat;
         activeCats.push(activeCat);
         break;
       default: // Fallback
         throw new Error("Undefined cat type " + (serviceConfig as any).type);
     }
+  });
 
-    cats.push(cat);
+  return new StaticCatRepository(activeCats, passiveCats);
+}
 
-    setInterval(() => {
+const self = url.fileURLToPath(import.meta.url);
+
+if (process.argv[1] === self) {
+  const serviceLogs = new ConsoleServiceLogs();
+  const config: Config = JSON.parse(
+    readFileSync(process.argv[2]).toString("utf-8")
+  );
+
+  const catRepository = createStaticCatRepositoryFromConfig(
+    config,
+    new ConsoleServiceLogs()
+  );
+
+  const intervalTimerService = new NodeIntervalTimerService();
+
+  const cats = catRepository.collect();
+
+  cats.forEach((cat) => {
+    intervalTimerService.register(cat.getName(), cat.checkIntervalMS(), () => {
       cat.check(new Date());
-    }, cat.checkIntervalMS());
+    });
   });
 
   console.log(cats.length, "cat(s) loaded");
@@ -410,7 +435,7 @@ if (process.argv[1] === self) {
   });
 
   fastify.register(
-    function (instance, options, done) {
+    function (instance, _, done) {
       instance.register(fastifyStatic, {
         root: path.join(
           path.dirname(new URL(import.meta.url).pathname),
@@ -487,7 +512,9 @@ if (process.argv[1] === self) {
       };
     }
     const params = request.params as Record<"service", string>;
-    const cat = passiveCats.find((cat) => cat.getName() === params.service);
+    const cat = catRepository
+      .collectPassiveCat()
+      .find((cat) => cat.getName() === params.service);
 
     if (cat === undefined) {
       reply.code(404);
