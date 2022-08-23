@@ -280,6 +280,42 @@ export class ActiveCat<T extends Checker> implements Cat {
   }
 }
 
+interface IntervalTimerService {
+  register(id: string, intervalMS: number, callback: () => void): void;
+  unregister(id: string): boolean;
+}
+
+class NodeIntervalTimerService implements IntervalTimerService {
+  private timers = new Map<string, NodeJS.Timer>();
+
+  register(id: string, intervalMS: number, callback: () => void): void {
+    const existingTimer = this.timers.get(id);
+    if (existingTimer !== undefined) {
+      clearInterval(existingTimer);
+    }
+    const timer = setInterval(() => {callback()}, intervalMS);
+
+    this.timers.set(id, timer);
+  }
+
+  unregister(id: string): boolean {
+    const timer = this.timers.get(id);
+    if (timer === undefined) {
+      return false;
+    }
+    clearInterval(timer);
+    return true;
+  }
+}
+
+interface CatRepository {
+  collect(): Cat[];
+}
+
+class SettingFileCatRepository {
+  
+}
+
 import url from "url";
 import Fastify from "fastify";
 import { fastifyRequestContextPlugin } from "@fastify/request-context";
