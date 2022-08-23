@@ -152,6 +152,7 @@ export class ConsoleServiceLogs extends VolatileMemoryServiceLogs {
 export interface Cat {
   check(date: Date): void;
   getName(): string;
+  checkIntervalMS(): number;
   isAlive(date: Date): boolean;
 }
 
@@ -202,6 +203,10 @@ export class PassiveCat implements Cat {
 
   getName(): string {
     return this.name;
+  }
+
+  checkIntervalMS(): number {
+    return this.toleranceDurationMS / 2;
   }
 
   isAlive(date: Date): boolean {
@@ -263,6 +268,10 @@ export class ActiveCat<T extends Checker> implements Cat {
     return this.name;
   }
 
+  checkIntervalMS(): number {
+    return this.toleranceDurationMS / 2;
+  }
+
   isAlive(date: Date): boolean {
     return (
       differenceInMilliseconds(date, this.lastFeedDate) <
@@ -312,8 +321,6 @@ if (process.argv[1] === self) {
   const cats: Cat[] = [];
 
   config.services.forEach((serviceConfig) => {
-    const serviceInterval = serviceConfig.duration / 2;
-
     let cat: Cat;
 
     switch (serviceConfig.type) {
@@ -350,7 +357,7 @@ if (process.argv[1] === self) {
 
     setInterval(() => {
       cat.check(new Date());
-    }, serviceInterval);
+    }, cat.checkIntervalMS());
   });
 
   console.log(cats.length, "cat(s) loaded");
