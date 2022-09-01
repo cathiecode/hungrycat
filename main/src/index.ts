@@ -151,6 +151,7 @@ export class ConsoleServiceLogs extends VolatileMemoryServiceLogs {
 
 export interface Cat {
   check(date: Date): void;
+  getId(): string;
   getName(): string;
   checkIntervalMS(): number;
   isAlive(date: Date): boolean;
@@ -160,6 +161,7 @@ export class PassiveCat implements Cat {
   private lastFeedDate: Date;
   private lastReportDate: Date | undefined;
   constructor(
+    private id: string,
     private name: string,
     private toleranceDurationMS: number,
     private reminderDurationMS: number,
@@ -201,6 +203,10 @@ export class PassiveCat implements Cat {
       );
   }
 
+  getId(): string {
+    return this.id;
+  }
+
   getName(): string {
     return this.name;
   }
@@ -221,6 +227,7 @@ export class ActiveCat implements Cat {
   private lastFeedDate: Date;
   private lastReportDate: Date | undefined;
   constructor(
+    private id: string,
     private name: string,
     private toleranceDurationMS: number,
     private reminderDurationMS: number,
@@ -234,10 +241,10 @@ export class ActiveCat implements Cat {
 
   async check(date: Date) {
     if (await this.checker.check()) {
-      this.serviceLogs.logLiving(this.getName(), date);
+      this.serviceLogs.logLiving(this.getId(), date);
       this.lastFeedDate = date;
     } else {
-      this.serviceLogs.logDying(this.getName(), date);
+      this.serviceLogs.logDying(this.getId(), date);
     }
     if (
       differenceInMilliseconds(date, this.lastFeedDate) <
@@ -245,7 +252,7 @@ export class ActiveCat implements Cat {
     ) {
       return;
     }
-    this.serviceLogs.logDead(this.getName(), date);
+    this.serviceLogs.logDead(this.getId(), date);
     if (
       differenceInMilliseconds(date, this.lastReportDate ?? 0) <
       this.reminderDurationMS
@@ -262,6 +269,10 @@ export class ActiveCat implements Cat {
           date: date,
         })
       );
+  }
+
+  getId(): string {
+    return this.id;
   }
 
   getName(): string {
@@ -311,11 +322,19 @@ class NodeIntervalTimerService implements IntervalTimerService {
 }
 
 interface CatRepository {
-  collect(): Cat[];
+  find(id: string): Promise<Cat | undefined>;
+  count(): Promise<number>;
+  collect(): Promise<Cat[]>;
 }
 
 interface PassiveCatRepository {
-  collectPassiveCat(): PassiveCat[];
+  addPassiveCat(cat: PassiveCat): Promise<void>;
+  findPassiveCat(id: string): Promise<PassiveCat | undefined>;
+}
+
+interface ActiveCatRepository {
+  addActiveCat(cat: ActiveCat): Promise<void>;
+  findActiveCat(id: string): Promise<ActiveCat | undefined>;
 }
 
 import url from "url";
@@ -327,12 +346,14 @@ import path from "node:path";
 type ServiceConfig =
   | {
       type: "passive";
+      id: string;
       name: string;
       duration: number;
       reminderDuration?: number;
     }
   | {
       type: "active";
+      id: string;
       name: string;
       duration: number;
       reminderDuration?: number;
@@ -346,29 +367,59 @@ type Config = {
   discord_webhook: string;
 };
 
-class StaticCatRepository implements CatRepository, PassiveCatRepository {
+class StaticCatRepository
+  implements CatRepository, PassiveCatRepository, ActiveCatRepository
+{
   private cats: Cat[];
-  constructor(activeCats: ActiveCat[], private passiveCats: PassiveCat[]) {
+  constructor(
+    private activeCats: ActiveCat[],
+    private passiveCats: PassiveCat[]
+  ) {
     this.cats = [...activeCats, ...passiveCats];
   }
-  collect(): Cat[] {
-    return this.cats;
+  async addPassiveCat(cat: PassiveCat): Promise<void> {
+    this.passiveCats.push(cat);
+    this.cats.push(cat);
   }
-  collectPassiveCat(): PassiveCat[] {
-    return this.passiveCats;
+  async addActiveCat(cat: ActiveCat): Promise<void> {
+    this.activeCats.push(cat);
+    this.cats.push(cat);
+  }
+  async find(id: string): Promise<Cat | undefined> {
+    return this.cats.find((cat) => cat.getId() === id);
+  }
+  async findPassiveCat(id: string): Promise<PassiveCat | undefined> {
+    return this.passiveCats.find((cat) => cat.getId() === id);
+  }
+  async findActiveCat(id: string): Promise<ActiveCat | undefined> {
+    return this.activeCats.find((cat) => cat.getId() === id);
+  }
+  async count(): Promise<number> {
+    return this.cats.length;
+  }
+  async collect(): Promise<Cat[]> {
+    return this.cats;
   }
 }
 
-function createStaticCatRepositoryFromConfig(
-  config: Config,
-  serviceLogs: ServiceLogger
-): StaticCatRepository {
-  const activeCats: ActiveCat[] = [];
-  const passiveCats: PassiveCat[] = [];
-  config.services.forEach((serviceConfig) => {
+const self = url.fileURLToPath(import.meta.url);
+
+const main = async () => {
+  const serviceLogs = new ConsoleServiceLogs();
+  const config: Config = JSON.parse(
+    readFileSync(process.argv[2]).toString("utf-8")
+  );
+
+  const catRepository = new StaticCatRepository([], []);
+
+  const intervalTimerService = new NodeIntervalTimerService();
+
+  await Promise.all(config.services.map(async (serviceConfig) => {
+    let cat: Cat;
     switch (serviceConfig.type) {
       case "passive":
         const passiveCat = new PassiveCat(
+          serviceConfig.id,
           serviceConfig.name,
           serviceConfig.duration,
           serviceConfig.reminderDuration ?? 1000 * 60 * 60,
@@ -376,10 +427,12 @@ function createStaticCatRepositoryFromConfig(
           new DiscordWebhookNotifier(config.discord_webhook),
           serviceLogs
         );
-        passiveCats.push(passiveCat);
+        await catRepository.addPassiveCat(passiveCat);
+        cat = passiveCat;
         break;
       case "active":
         const activeCat = new ActiveCat(
+          serviceConfig.id,
           serviceConfig.name,
           serviceConfig.duration,
           serviceConfig.reminderDuration ?? 1000 * 60 * 60,
@@ -388,40 +441,19 @@ function createStaticCatRepositoryFromConfig(
           new DiscordWebhookNotifier(config.discord_webhook),
           serviceLogs
         );
-        activeCats.push(activeCat);
+        await catRepository.addActiveCat(activeCat);
+        cat = activeCat;
         break;
       default: // Fallback
         throw new Error("Undefined cat type " + (serviceConfig as any).type);
     }
-  });
 
-  return new StaticCatRepository(activeCats, passiveCats);
-}
-
-const self = url.fileURLToPath(import.meta.url);
-
-if (process.argv[1] === self) {
-  const serviceLogs = new ConsoleServiceLogs();
-  const config: Config = JSON.parse(
-    readFileSync(process.argv[2]).toString("utf-8")
-  );
-
-  const catRepository = createStaticCatRepositoryFromConfig(
-    config,
-    new ConsoleServiceLogs()
-  );
-
-  const intervalTimerService = new NodeIntervalTimerService();
-
-  const cats = catRepository.collect();
-
-  cats.forEach((cat) => {
     intervalTimerService.register(cat.getName(), cat.checkIntervalMS(), () => {
       cat.check(new Date());
     });
-  });
+  }));
 
-  console.log(cats.length, "cat(s) loaded");
+  console.log(await catRepository.count(), "cat(s) loaded");
 
   const fastify = Fastify();
 
@@ -496,14 +528,15 @@ if (process.argv[1] === self) {
     }
     return {
       ok: true,
-      services: cats.map((cat) => ({
+      services: (await catRepository.collect()).map((cat) => ({
+        id: cat.getId(),
         name: cat.getName(),
         status: cat.isAlive(new Date()),
       })),
     };
   });
 
-  fastify.post("/service/:service/hb", (request, reply) => {
+  fastify.post("/service/:service/hb", async (request, reply) => {
     if (!request.requestContext.get("capability").includes("HEARTBEAT")) {
       reply.code(401);
       return {
@@ -512,9 +545,7 @@ if (process.argv[1] === self) {
       };
     }
     const params = request.params as Record<"service", string>;
-    const cat = catRepository
-      .collectPassiveCat()
-      .find((cat) => cat.getName() === params.service);
+    const cat = await catRepository.findPassiveCat(params.service);
 
     if (cat === undefined) {
       reply.code(404);
@@ -588,4 +619,8 @@ if (process.argv[1] === self) {
       capability: request.requestContext.get("capability"),
     };
   });
+}
+
+if (process.argv[1] === self) {
+  main()
 }
